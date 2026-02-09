@@ -1589,16 +1589,7 @@ return true;
   
         manufacturer_profile_id: str(pick(row, "manufacturer_profile_id")) || null,
   
-        transport_profile_ids: (() => {
-          const v = pick(row, "transport_profile_ids");
-          const s = str(v);
-          if (!s) return [];
-          try {
-            const j = JSON.parse(s);
-            if (Array.isArray(j)) return j.map(str).filter(Boolean);
-          } catch {}
-          return s.split(";").map((x) => str(x)).filter(Boolean);
-        })(),
+        transport_profile_ids: parseIdsCell(pick(row, "transport_profile_ids") || pick(row, "transportProfileIds")),
       },
   
       evidence: {
