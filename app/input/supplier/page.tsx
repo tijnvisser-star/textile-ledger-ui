@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 import * as XLSX from "xlsx";
 
 type ActorUser = { actor_id: string | null };
@@ -116,7 +116,7 @@ function readBestImpactFromPayload(p: any): ImpactPerKg {
 
 const MIN_PROFILE_ID_LEN = 10;
 
-export default function SupplierInputPage() {
+function SupplierInputPageInner() {
   const ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID ?? "";
   const search = useSearchParams();
   const router = useRouter();
@@ -138,6 +138,14 @@ export default function SupplierInputPage() {
       setProductLine(productFromUrl);
     }
   }, [productFromUrl, productLine]);
+  
+  export default function SupplierInputPage() {
+    return (
+      <Suspense fallback={<div style={{ padding: 40, fontFamily: "system-ui" }}>Loading…</div>}>
+        <SupplierInputPageInner />
+      </Suspense>
+    );
+  }
   
   const actorLabel = meNameDirty ? meName : actorName;
 
