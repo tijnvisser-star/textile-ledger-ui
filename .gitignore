@@ -13,3 +13,7 @@ node_modules
 
 # local backups
 *.save
+
+# backups
+*.backup
+*.BROKEN.backup

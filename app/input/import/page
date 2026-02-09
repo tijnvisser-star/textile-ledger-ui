@@ -1,0 +1,295 @@
+"use client";
+
+import * as XLSX from "xlsx";
+import { useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+
+type ImportRow = {
+  external_id?: string;
+  phase?: string;
+  process_type?: string;
+  material_primary?: string;
+  material_origin?: string;
+  recycled_subtype?: string;
+
+  co2_kg_per_kg?: number;
+  water_l_per_kg?: number;
+  energy_kwh_per_kg?: number;
+  pm25_g_per_kg?: number;
+
+  chemicals_used?: string;
+  substances_of_concern?: string;
+
+  transport_mode?: string;
+  distance_km?: number;
+
+  evidence_type?: string;
+  evidence_url?: string;
+  evidence_note?: string;
+};
+
+function toNumber(v: any): number {
+  if (v === null || v === undefined || v === "") return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export default function ImportExcelPage() {
+  const router = useRouter();
+
+  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [msg, setMsg] = useState<string>("");
+
+  async function handleFile(file: File) {
+    setMsg("");
+    setErrors([]);
+    setRows([]);
+
+    const data = await file.arrayBuffer();
+    const wb = XLSX.read(data, { type: "array" });
+
+    // We expect a sheet called "Profiles" (case sensitive)
+    const sheet = wb.Sheets["Profiles"];
+    if (!sheet) {
+      setErrors([
+        `No sheet named "Profiles" found. Please name your first tab exactly: Profiles`,
+      ]);
+      return;
+    }
+
+    const json = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as any[];
+
+    // Normalize into our ImportRow format
+    const normalized: ImportRow[] = json.map((r) => ({
+      external_id: String(r.external_id || r.externalId || "").trim(),
+      phase: String(r.phase || "").trim(),
+      process_type: String(r.process_type || "").trim(),
+
+      material_primary: String(r.material_primary || "").trim(),
+      material_origin: String(r.material_origin || "").trim(),
+      recycled_subtype: String(r.recycled_subtype || "").trim(),
+
+      co2_kg_per_kg: toNumber(r.co2_kg_per_kg),
+      water_l_per_kg: toNumber(r.water_l_per_kg),
+      energy_kwh_per_kg: toNumber(r.energy_kwh_per_kg),
+      pm25_g_per_kg: toNumber(r.pm25_g_per_kg),
+
+      chemicals_used: String(r.chemicals_used || "").trim(),
+      substances_of_concern: String(r.substances_of_concern || "").trim(),
+
+      transport_mode: String(r.transport_mode || "").trim(),
+      distance_km: toNumber(r.distance_km),
+
+      evidence_type: String(r.evidence_type || "self_declared").trim(),
+      evidence_url: String(r.evidence_url || "").trim(),
+      evidence_note: String(r.evidence_note || "").trim(),
+    }));
+
+    // Basic validation
+    const errs: string[] = [];
+    normalized.forEach((r, idx) => {
+      const rowNo = idx + 2; // assuming headers on row 1
+      if (!r.phase) errs.push(`Row ${rowNo}: phase is required`);
+      if (r.phase && !["RawMaterials","Yarn","Fabric","Manufacturer","Transport","Brand"].includes(r.phase)) {
+        errs.push(`Row ${rowNo}: invalid phase "${r.phase}"`);
+      }
+      if (r.phase === "RawMaterials" && !r.material_primary) {
+        errs.push(`Row ${rowNo}: material_primary is required for RawMaterials`);
+      }
+      if (r.phase === "Transport" && (!r.transport_mode || !r.distance_km)) {
+        errs.push(`Row ${rowNo}: transport_mode and distance_km are required for Transport`);
+      }
+    });
+
+    setRows(normalized);
+    setErrors(errs);
+    setMsg(`Loaded ${normalized.length} rows from Excel.`);
+  }
+
+  function buildMaterialOrProcessLabel(r: ImportRow) {
+    if (r.phase === "RawMaterials") {
+      // keep it simple; later we can refine
+      if ((r.material_origin || "").toLowerCase() === "recycled" && r.recycled_subtype) {
+        return `RecycledMaterial:${r.recycled_subtype}`;
+      }
+      return r.material_primary || "Material";
+    }
+    // non raw: use process type
+    return r.process_type || "Process";
+  }
+
+  async function importToSupabase() {
+    setMsg("");
+  
+    const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+    const DEMO_ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID || "";
+  
+    let actorId: string | null = null;
+  
+    if (DEMO_MODE) {
+      if (!DEMO_ACTOR_ID) {
+        setMsg("DEMO_MODE is on but NEXT_PUBLIC_DEMO_ACTOR_ID is missing in .env.local");
+        return;
+      }
+      actorId = DEMO_ACTOR_ID;
+    } else {
+      const { data: authData } = await supabase.auth.getUser();
+      const uid = authData?.user?.id;
+      if (!uid) {
+        setMsg("Not logged in. Go to /login first.");
+        return;
+      }
+  
+      const { data: au, error: auErr } = await supabase
+        .from("actor_users")
+        .select("actor_id")
+        .eq("auth_uid", uid)
+        .single();
+  
+      if (auErr) {
+        setMsg(auErr.message);
+        return;
+      }
+  
+      actorId = (au as any)?.actor_id as string | null;
+      if (!actorId) {
+        setMsg("No actor linked. Go to /input/supplier and click 'Save actor' first.");
+        return;
+      }
+    }
+  
+    if (errors.length > 0) {
+      setMsg("Fix the validation errors first (see list).");
+      return;
+    }
+  
+    if (rows.length === 0) {
+      setMsg("No rows loaded.");
+      return;
+    }
+  
+    // Insert rows one by one (simple now; bulk-ready later)
+    let ok = 0;
+    const fail: string[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const material_or_process = buildMaterialOrProcessLabel(r);
+
+      const payload: any = {
+        external_id: r.external_id || null,
+        phase: r.phase,
+        process_type: r.process_type || null,
+        material_or_process,
+        unit: "kg",
+        transport: r.phase === "Transport"
+          ? { mode: r.transport_mode || "truck", distance_km: r.distance_km || 0 }
+          : undefined,
+        impacts_per_kg: {
+          co2_kg: r.co2_kg_per_kg ?? 0,
+          water_l: r.phase === "Transport" ? 0 : (r.water_l_per_kg ?? 0),
+          energy_kwh: r.phase === "Transport" ? 0 : (r.energy_kwh_per_kg ?? 0),
+          ...(r.phase === "Transport" ? { pm25_g_per_kg: r.pm25_g_per_kg ?? 0 } : {}),
+        },
+        chemicals:
+          ["RawMaterials","Yarn","Fabric","Manufacturer"].includes(r.phase || "")
+            ? {
+                chemicals_used: r.chemicals_used || null,
+                substances_of_concern: r.substances_of_concern || null,
+              }
+            : undefined,
+        evidence: {
+          type: (r.evidence_type || "self_declared"),
+          url: r.evidence_url || null,
+          note: r.evidence_note || null,
+          file_path: null,
+        },
+      };
+
+      const { error: insErr } = await supabase.from("profiles").insert({
+        owner_actor_id: actorId,
+        profile_type: r.phase === "RawMaterials" ? "material" : "process",
+        material_or_process,
+        region: null,
+        impact_payload: payload,
+      } as any);
+
+      if (insErr) {
+        fail.push(`Row ${i + 2}: ${insErr.message}`);
+      } else {
+        ok++;
+      }
+    }
+
+    if (fail.length > 0) {
+      setMsg(`Imported ${ok}/${rows.length}. Some failed.`);
+      setErrors(fail);
+      return;
+    }
+
+    setMsg(`Imported ✅ ${ok}/${rows.length} profiles saved.`);
+  }
+
+  return (
+    <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "system-ui" }}>
+      <h1>Import (Excel)</h1>
+
+      <p style={{ marginTop: 6, opacity: 0.8 }}>
+        Upload an .xlsx file with a sheet named <b>Profiles</b>.
+      </p>
+
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 12 }}>
+        <input
+          type="file"
+          accept=".xlsx"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+          }}
+        />
+
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button onClick={importToSupabase} style={{ padding: "10px 14px" }}>
+            Import to Supabase
+          </button>
+
+          <button onClick={() => router.push("/input/supplier")} style={{ padding: "10px 14px" }}>
+            Back to input
+          </button>
+        </div>
+
+        {msg && <p style={{ marginTop: 12 }}><b>{msg}</b></p>}
+      </div>
+
+      {errors.length > 0 && (
+        <div style={{ marginTop: 16, border: "1px solid #f2c", borderRadius: 12, padding: 12 }}>
+          <h3 style={{ marginTop: 0 }}>Errors</h3>
+          <ul>
+            {errors.slice(0, 50).map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+          {errors.length > 50 && <p>Showing first 50 errors…</p>}
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div style={{ marginTop: 16, border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+          <h3 style={{ marginTop: 0 }}>Preview (first 10 rows)</h3>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(rows.slice(0, 10), null, 2)}</pre>
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, opacity: 0.8 }}>
+        <h3>Required columns (minimum)</h3>
+        <ul>
+          <li><code>phase</code> (RawMaterials/Yarn/Fabric/Manufacturer/Transport/Brand)</li>
+          <li>For RawMaterials: <code>material_primary</code></li>
+          <li>For Transport: <code>transport_mode</code> and <code>distance_km</code></li>
+          <li>Optional: <code>co2_kg_per_kg</code>, <code>water_l_per_kg</code>, <code>energy_kwh_per_kg</code>, <code>pm25_g_per_kg</code></li>
+          <li>Optional: <code>evidence_type</code>, <code>evidence_url</code>, <code>evidence_note</code></li>
+        </ul>
+      </div>
+    </div>
+  );
+}
