@@ -1,36 +1,26 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-
-export default function Home() {
-  const [startHref, setStartHref] = useState("/login");
-  const [authText, setAuthText] = useState("Checking login…");
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      const email = data.session?.user?.email;
-      if (email) {
-        setAuthText(`Logged in as: ${email}`);
-        setStartHref("/input/supplier?phase=RawMaterials");
-      } else {
-        setAuthText("Not logged in");
-        setStartHref("/login");
-      }
-    })();
-  }, []);
-
+export default function HomePage() {
   return (
-    <div style={{ maxWidth: 900, margin: "60px auto", fontFamily: "system-ui" }}>
-      <h1>Textile Ledger – Beta</h1>
-      <p style={{ opacity: 0.8 }}>{authText}</p>
+    <div style={{ padding: 40, fontFamily: "system-ui" }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <a
+          href="/input/supplier?phase=RawMaterials"
+          style={{
+            padding: "10px 14px",
+            border: "1px solid #ddd",
+            borderRadius: 10,
+            textDecoration: "none",
+            color: "inherit",
+            background: "#fff",
+          }}
+        >
+          Open Supplier Input (Demo)
+        </a>
+      </div>
 
-      <ul style={{ listStyle: "none", padding: 0, marginTop: 20, lineHeight: "2.2em", fontSize: 22 }}>
-        <li><a href="/login">Login</a></li>
-        <li><a href="/browse">Browse</a></li>
-        <li><a href={startHref}>Start</a></li>
-      </ul>
+      <h1>Textile Ledger UI ✅</h1>
+      <p>
+        Home page works. Try: <a href="/test">/test</a>
+      </p>
     </div>
   );
 }
