@@ -116,6 +116,14 @@ function readBestImpactFromPayload(p: any): ImpactPerKg {
 
 const MIN_PROFILE_ID_LEN = 10;
 
+export default function SupplierInputPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, fontFamily: "system-ui" }}>Loading…</div>}>
+      <SupplierInputPageInner />
+    </Suspense>
+  );
+}
+
 function SupplierInputPageInner() {
   const ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID ?? "";
   const search = useSearchParams();
@@ -139,21 +147,13 @@ function SupplierInputPageInner() {
     }
   }, [productFromUrl, productLine]);
   
-  export default function SupplierInputPage() {
-    return (
-      <Suspense fallback={<div style={{ padding: 40, fontFamily: "system-ui" }}>Loading…</div>}>
-        <SupplierInputPageInner />
-      </Suspense>
-    );
-  }
-  
   const actorLabel = meNameDirty ? meName : actorName;
 
   // ---------- Import (XLSX) ----------
-const [importFile, setImportFile] = useState<File | null>(null);
-const [importing, setImporting] = useState<boolean>(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState<boolean>(false);
 
-function num(v: any) {
+  function num(v: any) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
