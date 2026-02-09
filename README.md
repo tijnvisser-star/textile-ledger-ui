@@ -1,3 +1,18 @@
+## Live demo (Vercel)
+
+- Home: https://textile-ledger-ui.vercel.app
+- Supplier input: https://textile-ledger-ui.vercel.app/input/supplier
+- Supplier input (example): https://textile-ledger-ui.vercel.app/input/supplier?phase=Yarn
+- Brand input: https://textile-ledger-ui.vercel.app/input/brand
+- Export: https://textile-ledger-ui.vercel.app/export
+- Routing test: https://textile-ledger-ui.vercel.app/test
+
+## Local run
+
+1) Install
+```bash
+npm install
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

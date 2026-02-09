@@ -125,13 +125,22 @@ export default function SupplierInputPage() {
 }
 
 function SupplierInputPageInner() {
-  const ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID ?? "";
+  const DEFAULT_ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID ?? "";
+  const ACTOR_ID_STORAGE_KEY = "textile-ledger.actorId";
   const search = useSearchParams();
   const router = useRouter();
   const phase = search.get("phase") ?? "RawMaterials";
   const productFromUrl = search.get("product") ?? "";
 
-  const [actorId, setActorId] = useState<string>(ACTOR_ID);
+  const [actorId, setActorId] = useState<string>(() => {
+    if (typeof window === "undefined") return DEFAULT_ACTOR_ID;
+    return window.localStorage.getItem(ACTOR_ID_STORAGE_KEY) ?? DEFAULT_ACTOR_ID;
+  });
+  
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ACTOR_ID_STORAGE_KEY, actorId);
+  }, [actorId]);  
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [actorName, setActorName] = useState<string>("…");
   const [meName, setMeName] = useState<string>("This is me");
@@ -1131,6 +1140,7 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
       .from("profiles")
       .insert({
         owner_actor_id: actorId,
+        owner_actor_label: meNameDirty ? meName : actorName,
         phase: phaseLocal,
         process_type: payload.process_type,
         profile_type: phaseLocal === "RawMaterials" ? "material" : "process",
@@ -1306,6 +1316,7 @@ if (parentProfileId) {
   .from("profiles")
   .insert({
     owner_actor_id: actorId,
+    owner_actor_label: meNameDirty ? meName : actorName,
     phase,
     process_type: processType,
     profile_type: phase === "RawMaterials" ? "material" : "process",
@@ -1754,6 +1765,16 @@ if (errors.length) {
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 12 }}>
   {/* ANCHOR:BEGIN:THIS_IS_ME */}
   <h2 style={{ marginTop: 0 }}>This is me</h2>
+
+  <div style={{ marginTop: 12 }}>
+  <div style={{ fontSize: 13, color: "#444", marginBottom: 6 }}>Actor ID</div>
+  <input
+    value={actorId}
+    onChange={(e) => setActorId(e.target.value)}
+    placeholder="e.g., SUPPLIER_A or BRAND_JANE"
+    style={{ width: "100%", padding: 12, border: "1px solid #ddd", borderRadius: 8 }}
+  />
+</div>
 
   <label>Display name</label>
   <input
