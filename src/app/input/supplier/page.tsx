@@ -444,6 +444,39 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
   }
 
   async function saveActorDetails() {
+      // --- Ensure actor exists (FK profiles.owner_actor_id → actors.actor_id)
+  const actorIdClean = actorId.trim();
+
+  if (!actorIdClean) {
+    setMsg("Actor ID is empty.");
+    return;
+  }
+
+  const { data: existingActor, error: actorSelectErr } = await supabase
+    .from("actors")
+    .select("actor_id")
+    .eq("actor_id", actorIdClean)
+    .maybeSingle();
+
+  if (actorSelectErr) {
+    setMsg(`Save failed (actor lookup): ${actorSelectErr.message}`);
+    return;
+  }
+
+  if (!existingActor) {
+    const { error: actorInsertErr } = await supabase
+      .from("actors")
+      .insert({
+        actor_id: actorIdClean,
+        label: meNameDirty ? meName : actorName,
+      } as any);
+
+    if (actorInsertErr) {
+      setMsg(`Save failed (create actor): ${actorInsertErr.message}`);
+      return;
+    }
+  }
+
     setMsg("");
   
     // CASE A — actorId bestaat nog niet → maak actor aan
@@ -1105,7 +1138,7 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
   
     // Find existing (same logic as UI save)
     let parentProfileId: string | null = await findExistingProfileId({
-      owner_actor_id: actorId,
+      owner_actor_id: actorIdClean,
       phase: phaseLocal,
       material_or_process,
       productLine: args.productLine ?? "",
@@ -1139,7 +1172,7 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
       const { data: inserted, error: pErr } = await supabase
       .from("profiles")
       .insert({
-        owner_actor_id: actorId,
+        owner_actor_id: actorIdClean,
         owner_actor_label: meNameDirty ? meName : actorName,
         phase: phaseLocal,
         process_type: payload.process_type,
@@ -1197,6 +1230,33 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
   }
   
   async function saveProfileAndComponents(): Promise<boolean> {
+      // Ensure actor exists before writing profiles (FK profiles.owner_actor_id → actors.actor_id)
+  const actorIdClean = actorId.trim();
+  if (!actorIdClean) {
+    throw new Error("Actor ID is empty.");
+  }
+
+  const { data: existingActor, error: actorSelectErr } = await supabase
+    .from("actors")
+    .select("actor_id")
+    .eq("actor_id", actorIdClean)
+    .maybeSingle();
+
+  if (actorSelectErr) {
+    throw new Error(`Actor lookup failed: ${actorSelectErr.message}`);
+  }
+
+  if (!existingActor) {
+    const { error: actorInsertErr } = await supabase.from("actors").insert({
+      actor_id: actorIdClean,
+      owner_actor_label: meNameDirty ? meName : actorName,
+    } as any);
+
+    if (actorInsertErr) {
+      throw new Error(`Create actor failed: ${actorInsertErr.message}`);
+    }
+  }
+
     setMsg("");
 
     console.log("SAVE DEBUG actorId=", actorId, "phase=", phase, "productLine=", productLine);
@@ -1265,7 +1325,7 @@ console.log(
   
       if (!parentProfileId) {
         parentProfileId = await findExistingProfileId({
-          owner_actor_id: actorId,
+          owner_actor_id: actorIdClean,
           phase,
           material_or_process,
           productLine: String(payload?.product?.label ?? ""),
@@ -1315,7 +1375,7 @@ if (parentProfileId) {
   const { data: inserted, error: pErr } = await supabase
   .from("profiles")
   .insert({
-    owner_actor_id: actorId,
+    owner_actor_id: actorIdClean,
     owner_actor_label: meNameDirty ? meName : actorName,
     phase,
     process_type: processType,
@@ -1770,7 +1830,12 @@ if (errors.length) {
   <div style={{ fontSize: 13, color: "#444", marginBottom: 6 }}>Actor ID</div>
   <input
     value={actorId}
-    onChange={(e) => setActorId(e.target.value)}
+    onChange={(e) => {
+      const v = e.target.value;
+      setActorId(v);
+      setMeName(v);
+      setMeNameDirty(true);
+    }}    
     placeholder="e.g., SUPPLIER_A or BRAND_JANE"
     style={{ width: "100%", padding: 12, border: "1px solid #ddd", borderRadius: 8 }}
   />
@@ -1778,13 +1843,17 @@ if (errors.length) {
 
   <label>Display name</label>
   <input
-    style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-    value={meName}
-    onChange={(e) => {
-      setMeName(e.target.value);
-      setMeNameDirty(true);
-    }}    
-  />
+  readOnly
+  style={{
+    width: "100%",
+    padding: 10,
+    margin: "6px 0 12px",
+    background: "#f5f5f5",
+    color: "#555",
+    cursor: "not-allowed",
+  }}
+  value={meName}
+/>
 
   <label>Country</label>
   <input
