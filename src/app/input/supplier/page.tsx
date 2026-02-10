@@ -125,38 +125,52 @@ export default function SupplierInputPage() {
 }
 
 function SupplierInputPageInner() {
-  const DEFAULT_ACTOR_ID = process.env.NEXT_PUBLIC_DEMO_ACTOR_ID ?? "";
-  const ACTOR_ID_STORAGE_KEY = "textile-ledger.actorId";
+  const ME_STORAGE_KEY = "tls_meName";        // 1x definiëren
+  const COUNTRY_STORAGE_KEY = "tls_meCountry"; // 1x definiëren
+
   const search = useSearchParams();
   const router = useRouter();
   const phase = search.get("phase") ?? "RawMaterials";
   const productFromUrl = search.get("product") ?? "";
 
-  const [actorId, setActorId] = useState<string>(() => {
-    if (typeof window === "undefined") return DEFAULT_ACTOR_ID;
-    return window.localStorage.getItem(ACTOR_ID_STORAGE_KEY) ?? DEFAULT_ACTOR_ID;
+  // --- Single source of truth: meName ---
+  const [meName, setMeName] = useState<string>(() => {
+    if (typeof window === "undefined") return "This is me";
+    return window.localStorage.getItem(ME_STORAGE_KEY) ?? "This is me";
   });
-  
+
+  const [meNameDirty, setMeNameDirty] = useState(false);
+
+  const [meCountry, setMeCountry] = useState<string>(() => {
+    if (typeof window === "undefined") return "NL";
+    return window.localStorage.getItem(COUNTRY_STORAGE_KEY) ?? "NL";
+  });
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(ACTOR_ID_STORAGE_KEY, actorId);
-  }, [actorId]);  
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  const [actorName, setActorName] = useState<string>("…");
-  const [meName, setMeName] = useState<string>("This is me");
-  const [meNameDirty, setMeNameDirty] = useState(false);
-  const [meCountry, setMeCountry] = useState<string>("NL");
-  const [msg, setMsg] = useState("");
-  const [existingEntries, setExistingEntries] = useState<Array<{ profile_id: string; label: string }>>([]);
-  const [productLine, setProductLine] = useState<string>("");
-  
+    window.localStorage.setItem(ME_STORAGE_KEY, meName);
+  }, [meName]);
+
   useEffect(() => {
-    if (productFromUrl && !productLine) {
-      setProductLine(productFromUrl);
-    }
-  }, [productFromUrl, productLine]);
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(COUNTRY_STORAGE_KEY, meCountry);
+  }, [meCountry]);
+
+    // Derived actor identity
+    const actorIdClean = meName.trim(); // dit is je actor_id
+    const actorLabel = actorIdClean;    // wat je in UI toont
+    const actorId = actorIdClean; // alias: voorkomt crashes als ergens nog actorId staat
   
-  const actorLabel = meNameDirty ? meName : actorName;
+    const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+    const [msg, setMsg] = useState("");
+    const [existingEntries, setExistingEntries] = useState<Array<{ profile_id: string; label: string }>>([]);
+    const [productLine, setProductLine] = useState<string>("");
+  
+    useEffect(() => {
+      if (productFromUrl && !productLine) {
+        setProductLine(productFromUrl);
+      }
+    }, [productFromUrl, productLine]);
 
   // ---------- Import (XLSX) ----------
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -283,12 +297,12 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
   
   useEffect(() => {
     (async () => {
-      if (!actorId) return;
+      if (!actorIdClean) return;
   
       const { data, error } = await supabase
         .from("profiles")
         .select("profile_id, phase, impact_payload")
-        .eq("owner_actor_id", actorId)
+        .eq("owner_actor_id", actorIdClean)
         .order("created_at", { ascending: false })
         .limit(50);
   
@@ -314,7 +328,7 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
   
       setExistingEntries(uniq);
     })();
-  }, [actorId, phase]);
+  }, [actorIdClean, phase]);
 
   useEffect(() => {
     (async () => {
@@ -430,10 +444,10 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
   }
 
   async function uploadEvidenceIfNeeded(parentProfileId: string): Promise<string | null> {
-    if (!evidenceFile || !actorId) return null;
+    if (!evidenceFile || !actorIdClean) return null;
 
     const safeName = evidenceFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path = `evidence/${actorId}/${parentProfileId}/${Date.now()}-${safeName}`;
+    const path = `evidence/${actorIdClean}/${parentProfileId}/${Date.now()}-${safeName}`;
 
     const { error } = await supabase.storage.from("evidence").upload(path, evidenceFile, {
       upsert: false,
@@ -443,98 +457,66 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
     return path;
   }
 
-  async function saveActorDetails() {
-      // --- Ensure actor exists (FK profiles.owner_actor_id → actors.actor_id)
-  const actorIdClean = actorId.trim();
-
-  if (!actorIdClean) {
-    setMsg("Actor ID is empty.");
-    return;
+  function supaErr(err: any) {
+    if (!err) return null;
+    return {
+      message: err?.message ?? null,
+      details: err?.details ?? null,
+      hint: err?.hint ?? null,
+      code: err?.code ?? null,
+      status: err?.status ?? null,
+    };
   }
-
-  const { data: existingActor, error: actorSelectErr } = await supabase
-    .from("actors")
-    .select("actor_id")
-    .eq("actor_id", actorIdClean)
-    .maybeSingle();
-
-  if (actorSelectErr) {
-    setMsg(`Save failed (actor lookup): ${actorSelectErr.message}`);
-    return;
-  }
-
-  if (!existingActor) {
-    const { error: actorInsertErr } = await supabase
+  
+  async function ensureActorRow(actorId: string) {
+    const { error } = await supabase
       .from("actors")
-      .insert({
-        actor_id: actorIdClean,
-        label: meNameDirty ? meName : actorName,
-      } as any);
-
-    if (actorInsertErr) {
-      setMsg(`Save failed (create actor): ${actorInsertErr.message}`);
-      return;
+      .upsert(
+        {
+          actor_id: actorId,
+          actor_kind: "supplier",
+          display_name: actorLabel ?? actorId,
+        },
+        { onConflict: "actor_id" }
+      )
+        
+    if (error) {
+      const e = supaErr(error);
+      console.error("[actors.upsert] failed:", e);
+      throw new Error(
+        `Save actor failed: ${e?.message ?? ""} | details=${e?.details ?? ""} | hint=${e?.hint ?? ""} | code=${e?.code ?? ""} | status=${e?.status ?? ""}`
+      );
     }
   }
-
+  
+  async function saveActorDetails() {
     setMsg("");
   
-    // CASE A — actorId bestaat nog niet → maak actor aan
-    if (!actorId) {
-      const { error } = await supabase.rpc("onboard_supplier", {
-        _display_name: meName,
-        _country: meCountry,
-        _phases: [phase],
-      });
-  
-      if (error) {
-        setMsg(`Actor create failed: ${error.message}`);
-        return;
-      }
-  
-      // ⚠️ ZONDER DIT KAN SAVE NOOIT WERKEN
-      // We MOETEN actorId in state zetten
-      const { data, error: fetchErr } = await supabase
-        .from("actors")
-        .select("actor_id, display_name")
-        .eq("display_name", meName)
-        .eq("country", meCountry)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-  
-      if (fetchErr || !data?.actor_id) {
-        setMsg("Actor created, but actor_id could not be resolved.");
-        return;
-      }
-  
-      setActorId(data.actor_id);     // ← this was the blocker
-      setActorName(data.display_name ?? meName);
-      setMeNameDirty(false);
-  
-      setMsg(`Actor created ✅ (${data.actor_id})`);
+    const id = meName.trim(); // spaties binnenin blijven
+    if (!id) {
+      setMsg("Vul eerst 'Company name' in.");
       return;
     }
   
-    // CASE B — actorId bestaat → update actor
-    const { error: updateErr } = await supabase
-      .from("actors")
-      .update({
-        display_name: meName,
-        country: meCountry,
-      })
-      .eq("actor_id", actorId);
+    // onthouden per browser
+    localStorage.setItem(ME_STORAGE_KEY, id);
+    localStorage.setItem(COUNTRY_STORAGE_KEY, meCountry);
   
-    if (updateErr) {
-      setMsg(`Actor update failed: ${updateErr.message}`);
-      return;
-    }
-  
-    setActorName(meName);
+    // UI-state sync (single source of truth = meName)
+    setMeName(id);
     setMeNameDirty(false);
-    setMsg("Actor updated ✅");
-  }
-    
+  
+    // (optioneel) meteen actor in DB zetten voor zekerheid:
+    try {
+      await ensureActorRow(id);
+    } catch (e: any) {
+      setMsg(e?.message ?? "Save actor failed");
+      return;
+    }
+  
+    setMsg("Saved ✅");
+  }  
+      
   function downloadTemplateXlsx() {
     const wb = XLSX.utils.book_new();
   
@@ -781,7 +763,7 @@ function buildSaveBundle() {
   
     const out = {
       meta: {
-        actor_id: actorId || null,
+        actor_id: actorIdClean || null,
         phase,
         product_line: productLine.trim() || null,
         profile_id: activeProfileId || null,
@@ -810,7 +792,7 @@ function buildSaveBundle() {
   
     const row: Record<string, any> = {
       phase,
-      actor_id: actorId || "",
+      actor_id: actorIdClean || "",
       product_line: productLine || "",
       profile_id: activeProfileId || "",
   
@@ -1070,7 +1052,7 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
     upstream_transport_profile_ids?: string[];
     upstream_transport_manual?: { co2_kg: number; energy_kwh: number; pm25_g_per_kg?: number };
   }) {
-    if (!actorId) throw new Error("No actorId in upsertImportedProfile");
+    if (!actorIdClean) throw new Error("No actorId in upsertImportedProfile");
   
     const phaseLocal = args.importPhase;
     const material_or_process = args.material_or_process;
@@ -1149,6 +1131,9 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
       const { error: uErr } = await supabase
       .from("profiles")
       .update({
+        owner_actor_id: actorIdClean,
+        owner_actor_label: actorLabel,
+        product_line: (args.productLine ?? "").trim(),
         profile_type: phaseLocal === "RawMaterials" ? "material" : "process",
         material_or_process,
         raw_material: rawMaterialColumnValue({
@@ -1173,7 +1158,8 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
       .from("profiles")
       .insert({
         owner_actor_id: actorIdClean,
-        owner_actor_label: meNameDirty ? meName : actorName,
+        owner_actor_label: actorLabel,
+        product_line: (args.productLine ?? "").trim(),       
         phase: phaseLocal,
         process_type: payload.process_type,
         profile_type: phaseLocal === "RawMaterials" ? "material" : "process",
@@ -1230,97 +1216,53 @@ sum.pm25_g_per_kg = (sum.pm25_g_per_kg ?? 0) + Number(upstreamTransportManual.pm
   }
   
   async function saveProfileAndComponents(): Promise<boolean> {
-      // Ensure actor exists before writing profiles (FK profiles.owner_actor_id → actors.actor_id)
-  const actorIdClean = actorId.trim();
-  if (!actorIdClean) {
-    throw new Error("Actor ID is empty.");
-  }
-
-  const { data: existingActor, error: actorSelectErr } = await supabase
-    .from("actors")
-    .select("actor_id")
-    .eq("actor_id", actorIdClean)
-    .maybeSingle();
-
-  if (actorSelectErr) {
-    throw new Error(`Actor lookup failed: ${actorSelectErr.message}`);
-  }
-
-  if (!existingActor) {
-    const { error: actorInsertErr } = await supabase.from("actors").insert({
-      actor_id: actorIdClean,
-      owner_actor_label: meNameDirty ? meName : actorName,
-    } as any);
-
-    if (actorInsertErr) {
-      throw new Error(`Create actor failed: ${actorInsertErr.message}`);
-    }
-  }
-
     setMsg("");
-
-    console.log("SAVE DEBUG actorId=", actorId, "phase=", phase, "productLine=", productLine);
-    console.log("[SAVE] start", { phase, actorId, productLine, activeProfileId });
   
-    const sess = await supabase.auth.getSession();
-    console.log("[SAVE] session", sess.data?.session ? "HAS_SESSION" : "NO_SESSION");
-
-    const probe = await supabase
-  .from("profiles")
-  .select("profile_id")
-  .limit(1);
-
-console.log(
-  "[RLS probe]",
-  probe.error ? `ERROR: ${probe.error.message}` : "OK"
-);
-
-    try {  
-      // 0) Must have actor
-      if (!actorId) {
-        setMsg("No actor linked yet. Fill in 'This is me' and click 'Save actor'.");
-        return false;
-      }
+    const actorIdClean = meName.trim();
+    if (!actorIdClean) {
+      setMsg("Company name is empty.");
+      return false;
+    }
   
-            // 1) Validate inputs for phases with components
-
-            const needsComponentsForValidation = phase !== "RawMaterials" && phase !== "Transport" && phase !== "Brand";
+    if (!productLine.trim()) {
+      setMsg("Please enter Productline (product + productcode) before saving.");
+      return false;
+    }
   
-      if (!productLine.trim()) {
-        setMsg("Please enter Productline (product + productcode) before saving.");
-        return false;
-      }
-      
+    // 0) Actor MUST exist (FK target)
+    try {
+      await ensureActorRow(actorIdClean);
+    } catch (e: any) {
+      setMsg(e?.message ?? "Save actor failed");
+      return false;
+    }
+  
+    console.log("[SAVE] start", { phase, actorIdClean, productLine, activeProfileId });
+  
+    try {
+      const needsComponentsForValidation =
+        phase !== "RawMaterials" && phase !== "Transport" && phase !== "Brand";
+  
       if (needsComponentsForValidation) {
-        const hasAnyValidId = components.some(
-          (c) => (c.component_profile_id || "").trim().length >= MIN_PROFILE_ID_LEN
-        );
-      
-        // Alleen valideren als er überhaupt component ids zijn ingevuld
-        if (hasAnyValidId) {
+        const anyTyped = components.some(c => (c.component_profile_id || "").trim());
+        const anyValid = components.some(c => (c.component_profile_id || "").trim().length >= MIN_PROFILE_ID_LEN);
+  
+        if (anyTyped && !anyValid) {
+          setMsg("Please enter valid component_profile_id(s) (PROF_...) or leave them all empty.");
+          return false;
+        }
+  
+        if (anyValid) {
           const t = totalPercent();
           if (Math.round(t * 100) / 100 !== 100) {
             setMsg(`Percentages must add up to 100. Currently: ${t}`);
             return false;
           }
-      
-          const anyMissing = components.some(
-            (c) =>
-              (c.component_profile_id || "").trim().length > 0 &&
-              (c.component_profile_id || "").trim().length < MIN_PROFILE_ID_LEN
-          );
-      
-          if (anyMissing) {
-            setMsg("Please enter valid component_profile_id(s) (or leave them all empty).");
-            return false;
-          }
         }
       }
-        
-            // 2) Build payload (single source of truth)
-            const { needsComponents, material_or_process, payload, component_rows } = buildSaveBundle();
   
-      // 3) Determine parentProfileId (existing or new)
+      const { material_or_process, payload, component_rows } = buildSaveBundle();
+  
       let parentProfileId: string | null = activeProfileId;
   
       if (!parentProfileId) {
@@ -1332,187 +1274,143 @@ console.log(
         });
       }
   
-      console.log("SAVE DEBUG will write", {
-        actorId,
-        parentProfileId,
-        phase,
-        processType,
-        material_or_process,
-        productLine,
-      });
-
-      // 4) UPDATE or INSERT (WITH LOGS + SELECT)
-if (parentProfileId) {
-  console.log("[SAVE] updating existing profile", parentProfileId);
-
-  const { data: uData, error: uErr } = await supabase
-  .from("profiles")
-  .update({
-    profile_type: phase === "RawMaterials" ? "material" : "process",
-    material_or_process,
-    raw_material: rawMaterialColumnValue({
-      phase,
-      rawMaterial,
-      recycledBaseMaterial,
-      recycledSubtype,
-      material_or_process,
-    }),
-    region: null,
-    impact_payload: payload,
-  } as any)
-  .eq("profile_id", parentProfileId)
-  .select("profile_id"); // <-- force response
-
-  console.log("[SAVE] update response", { uData, uErr });
-
-  if (uErr) {
-    setMsg(`Save failed (update): ${uErr.message}`);
-    return false;
-  }
-} else {
-  console.log("[SAVE] inserting new profile");
-
-  const { data: inserted, error: pErr } = await supabase
-  .from("profiles")
-  .insert({
-    owner_actor_id: actorIdClean,
-    owner_actor_label: meNameDirty ? meName : actorName,
-    phase,
-    process_type: processType,
-    profile_type: phase === "RawMaterials" ? "material" : "process",
-    material_or_process,
-    raw_material: rawMaterialColumnValue({
-      phase,
-      rawMaterial,
-      recycledBaseMaterial,
-      recycledSubtype,
-      material_or_process,
-    }),
-    region: null,
-    impact_payload: payload,
-  } as any)
-  .select("profile_id")
-  .single();
-
-  console.log("[SAVE] insert response", { inserted, pErr });
-
-  if (pErr) {
-    const pretty = {
-      message: pErr.message,
-      details: (pErr as any)?.details ?? null,
-      hint: (pErr as any)?.hint ?? null,
-      code: (pErr as any)?.code ?? null,
-      status: (pErr as any)?.status ?? null,
-    };
+      if (parentProfileId) {
+        const { error } = await supabase
+          .from("profiles")
+          .update({
+            owner_actor_id: actorIdClean,
+            owner_actor_label: actorLabel,
+            product_line: productLine.trim(),
+            profile_type: phase === "RawMaterials" ? "material" : "process",
+            material_or_process,
+            raw_material: rawMaterialColumnValue({
+              phase,
+              rawMaterial,
+              recycledBaseMaterial,
+              recycledSubtype,
+              material_or_process,
+            }),
+            region: null,
+            impact_payload: payload,
+          } as any)
+          .eq("profile_id", parentProfileId);
   
-    setMsg(
-      `Save failed (insert): ${pretty.message} | details=${pretty.details ?? ""} | hint=${pretty.hint ?? ""} | code=${pretty.code ?? ""} | status=${pretty.status ?? ""}`
-    );
+        if (error) {
+          setMsg(`Save failed (update): ${error.message}`);
+          return false;
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("profiles")
+          .insert({
+            owner_actor_id: actorIdClean,
+            owner_actor_label: actorLabel,
+            product_line: productLine.trim(),
+            phase,
+            process_type: processType,
+            profile_type: phase === "RawMaterials" ? "material" : "process",
+            material_or_process,
+            raw_material: rawMaterialColumnValue({
+              phase,
+              rawMaterial,
+              recycledBaseMaterial,
+              recycledSubtype,
+              material_or_process,
+            }),
+            region: null,
+            impact_payload: payload,
+          } as any)
+          .select("profile_id")
+          .single();
   
-    console.error("INSERT ERROR FULL", pretty, pErr);
-    return false;
-  }
+        if (error) {
+          setMsg(`Save failed (insert): ${error.message}`);
+          return false;
+        }
   
-  parentProfileId = (inserted as any)?.profile_id ?? null;
-}
-  
+        parentProfileId = (data as any)?.profile_id ?? null;
+      }
+
       if (!parentProfileId) {
         setMsg("Save failed: no profile_id returned.");
         return false;
       }
-  
-      setActiveProfileId(parentProfileId);
-  
-      // 5) Evidence upload (optional)
-      const filePath = await uploadEvidenceIfNeeded(parentProfileId);
-  
-      if (filePath) {
-        payload.evidence.file_path = filePath;
-  
-        const { error: evErr } = await supabase
-          .from("profiles")
-          .update({ impact_payload: payload } as any)
-          .eq("profile_id", parentProfileId);
-  
-        if (evErr) {
-          setMsg(`Saved profile, but evidence update failed: ${evErr.message}`);
-          return false;
-        }
-      }
-  
-      // 6) Components links
-      if (needsComponentsForValidation) {
-        const rows = component_rows.map((r) => ({
-          parent_profile_id: parentProfileId,
-          component_profile_id: r.component_profile_id,
-          percent: r.percent,
-        }));        
       
-        // Alleen als er rows zijn: rewrite links
-        if (rows.length > 0) {
-          const { error: dErr } = await supabase
-            .from("profile_components")
-            .delete()
-            .eq("parent_profile_id", parentProfileId);
-      
-          if (dErr) {
-            setMsg(`Saved profile, but components delete failed: ${dErr.message}`);
-            return false;
-          }
-      
-          const { error: cErr } = await supabase
-            .from("profile_components")
-            .insert(rows as any);
-      
-          if (cErr) {
-            setMsg(`Saved profile, but components insert failed: ${cErr.message}`);
-            return false;
-          }
-        }
-      }
-        
-      // 7) Success
-setMsg(`Saved ✅ profile_id = ${parentProfileId}`);
-setEvidenceFile(null);
+      // --- WRITE profile_components (Save must persist components like Import) ---
+      const needsComponents =
+      phase !== "RawMaterials" && phase !== "Transport" && phase !== "Brand";
 
-// REFRESH dropdown list (so you SEE the save immediately)
-try {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("profile_id, phase, impact_payload")
-    .eq("owner_actor_id", actorId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+      if (needsComponents) {
+        // Delete previous rows
+        const { error: dErr } = await supabase
+        .from("profile_components")
+        .delete()
+        .eq("parent_profile_id", parentProfileId);
+  
+    if (dErr) {
+      setMsg(`Save failed (components delete): ${dErr.message}`);
+      return false;
+    }
 
-  if (!error) {
-    const rows = (data ?? [])
-      .map((r: any) => {
-        const p = r.impact_payload ?? {};
-        if (r.phase !== phase) return null;
-        const label = p?.product?.label ?? "";
-        const fallback = `${p?.phase ?? "?"} — ${r.profile_id.slice(0, 8)}…`;
-        return { profile_id: r.profile_id as string, label: String(label || fallback) };
-      })
-      .filter(Boolean) as Array<{ profile_id: string; label: string }>;
+  // Insert current rows
+  const rows = component_rows.map((c) => ({
+    parent_profile_id: parentProfileId,
+    component_profile_id: c.component_profile_id,
+    percent: Number(c.percent),
+  }));
 
-    const seen = new Set<string>();
-    const uniq = rows.filter((r) => {
-      if (seen.has(r.label)) return false;
-      seen.add(r.label);
-      return true;
-    });
+  if (rows.length) {
+    const { error: cErr } = await supabase
+      .from("profile_components")
+      .insert(rows as any);
 
-    setExistingEntries(uniq);
-  }
-} catch {}
-
-return true;
-    } catch (e: any) {
-      setMsg(e?.message ?? "Upload/save error");
+    if (cErr) {
+      setMsg(`Save failed (components insert): ${cErr.message}`);
       return false;
     }
   }
-    
+}
+// --- END WRITE profile_components ---
+
+// --- UPLOAD evidence file (optional) and persist evidence.file_path ---
+try {
+  const path = await uploadEvidenceIfNeeded(parentProfileId);
+
+  if (path) {
+    const nextPayload = {
+      ...payload,
+      evidence: {
+        ...(payload?.evidence ?? {}),
+        file_path: path,
+      },
+    };
+
+    const { error: eErr } = await supabase
+      .from("profiles")
+      .update({ impact_payload: nextPayload } as any)
+      .eq("profile_id", parentProfileId);
+
+    if (eErr) {
+      setMsg(`Save failed (evidence update): ${eErr.message}`);
+      return false;
+    }
+  }
+} catch (e: any) {
+  setMsg(e?.message ?? "Save failed (evidence upload)");
+  return false;
+}
+// --- END evidence upload ---
+
+      setActiveProfileId(parentProfileId);
+      setMsg(`Saved ✅ profile_id = ${parentProfileId}`);
+      return true;      
+  
+    } catch (e: any) {
+      setMsg(e?.message ?? "Save error");
+      return false;
+    }
+  }
+  
   const totalCo2 = (upstreamCalc?.co2_kg ?? 0) + (Number(co2KgPerKg) || 0);
   const totalWater = (upstreamCalc?.water_l ?? 0) + (Number(waterLPerKg) || 0);
   const totalEnergy = (upstreamCalc?.energy_kwh ?? 0) + (Number(energyKwhPerKg) || 0);
@@ -1739,7 +1637,7 @@ type ImportErrorRow = { sheet: string; row: number; message: string };
     try {
       setMsg("");
       if (!importFile) return setMsg("First select a .xlsx file.");
-      if (!actorId) return setMsg("No actor connected. Click 'Save actor' first.");
+      if (!actorIdClean) return setMsg("No actor connected. Click 'Save actor' first.");
   
       setImporting(true);
   
@@ -1823,44 +1721,26 @@ if (errors.length) {
     <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "system-ui" }}>
       <h1>T-easy AAS Textile Ledger</h1>
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 12 }}>
+  
   {/* ANCHOR:BEGIN:THIS_IS_ME */}
-  <h2 style={{ marginTop: 0 }}>This is me</h2>
-
-  <div style={{ marginTop: 12 }}>
-  <div style={{ fontSize: 13, color: "#444", marginBottom: 6 }}>Actor ID</div>
-  <input
-    value={actorId}
-    onChange={(e) => {
-      const v = e.target.value;
-      setActorId(v);
-      setMeName(v);
-      setMeNameDirty(true);
-    }}    
-    placeholder="e.g., SUPPLIER_A or BRAND_JANE"
-    style={{ width: "100%", padding: 12, border: "1px solid #ddd", borderRadius: 8 }}
-  />
-</div>
-
-  <label>Display name</label>
-  <input
-  readOnly
-  style={{
-    width: "100%",
-    padding: 10,
-    margin: "6px 0 12px",
-    background: "#f5f5f5",
-    color: "#555",
-    cursor: "not-allowed",
-  }}
+<label>Company name</label>
+<input
+  style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
   value={meName}
+  onChange={(e) => {
+    setMeName(e.target.value);
+    setMeNameDirty(true);
+  }}
+  placeholder="enter company name"
 />
 
-  <label>Country</label>
-  <input
-    style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-    value={meCountry}
-    onChange={(e) => setMeCountry(e.target.value)}
-  />
+<label>Country</label>
+<input
+  style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
+  value={meCountry}
+  onChange={(e) => setMeCountry(e.target.value)}
+/>
+
 <label>Productline (product + productcode)</label>
 <input
   style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
@@ -1869,14 +1749,8 @@ if (errors.length) {
   placeholder='"T-shirt women – SKU 12345"'
 />
 
-  <button onClick={saveActorDetails} style={{ padding: "10px 14px" }}>
-    Save actor
-  </button>
-
-  <p style={{ marginTop: 10, opacity: 0.7 }}>
-  Actor: <b>{actorLabel}</b> <span>({actorId ?? "not linked yet"})</span>
-  </p>
-  {/* ANCHOR:END:THIS_IS_ME */}
+<button onClick={saveActorDetails}>Save</button>
+{/* ANCHOR:END:THIS_IS_ME */}
 </div>
 
 <p style={{ marginTop: 6, opacity: 0.7 }}>
@@ -1905,7 +1779,7 @@ if (errors.length) {
 </div>
 
       <p>Phase: <b>{phase}</b></p>
-      <p>Actor: <b>{actorLabel}</b> <span style={{ opacity: 0.6 }}>({actorId ?? "…"})</span></p>
+      <p>Actor: <b>{actorLabel || "—"}</b></p>
       <div style={{ margin: "10px 0 16px" }}>
   {/* ANCHOR:BEGIN:LOAD_EXISTING */}
   <label style={{ display: "block", marginBottom: 6, opacity: 0.85 }}>
@@ -1930,6 +1804,31 @@ if (errors.length) {
       if (error) return setMsg(error.message);
 
       const p: any = (data as any)?.impact_payload ?? {};
+      // --- LOAD profile_components into UI (Yarn/Fabric/Manufacturer) ---
+if (p?.phase !== "RawMaterials" && p?.phase !== "Transport" && p?.phase !== "Brand") {
+  const { data: compRows, error: compErr } = await supabase
+    .from("profile_components")
+    .select("component_profile_id, percent")
+    .eq("parent_profile_id", id)
+    .order("percent", { ascending: false });
+
+  if (compErr) return setMsg(compErr.message);
+
+  const mapped = (compRows ?? []).map((r: any) => ({
+    component_profile_id: String(r.component_profile_id ?? ""),
+    percent: Number(r.percent ?? 0),
+  }));
+
+  setComponents(mapped.length ? mapped : [{ component_profile_id: "", percent: 100 }]);
+} else {
+  // phases without components: reset to default
+  setComponents([
+    { component_profile_id: "", percent: 80 },
+    { component_profile_id: "", percent: 20 },
+  ]);
+}
+// --- END LOAD profile_components ---
+
       if (p?.process_type) setProcessType(String(p.process_type));
       setProductLine(p?.product?.label ?? "");
 
@@ -2856,7 +2755,7 @@ if (p.phase === "Brand") {
 <button
   type="button"
   onClick={async () => {
-    console.log("[SAVE] clicked", { phase, actorId, productLine, activeProfileId });
+    console.log("[SAVE] clicked", { phase, actorIdClean, productLine, activeProfileId });
     setMsg("Saving…");
     const ok = await saveProfileAndComponents();
     console.log("[SAVE] done", { ok });
