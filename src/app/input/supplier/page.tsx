@@ -2222,7 +2222,7 @@ if (p.phase === "Brand") {
         <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
         CO₂ <b>{(((v?.co2_kg ?? 0) * 1000)).toFixed(0)}</b> g/kg ·
         Water <b>{(v?.water_l ?? 0).toFixed(1)}</b> L/kg ·
-        Energy <b>{(v?.energy_kwh ?? 0).toFixed(3)}</b> kWh/kg
+        Energy <b>{fmtEnergyKwhPerKg(v?.energy_kwh ?? 0)}</b> kWh/kg
         {v?.pm25_g_per_kg != null ? <> · PM2.5 {v.pm25_g_per_kg.toFixed(3)} g/kg</> : null}
         </div>
 
@@ -2282,7 +2282,7 @@ if (p.phase === "Brand") {
     <div><b>{(upstreamCalc?.co2_kg ?? 0).toFixed(3)}</b> kg CO₂/kg</div>
     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
       Water <b>{(upstreamCalc?.water_l ?? 0).toFixed(1)}</b> L/kg · Energy{" "}
-      <b>{(upstreamCalc?.energy_kwh ?? 0).toFixed(3)}</b> kWh/kg
+      <b>{fmtEnergyKwhPerKg(upstreamCalc?.energy_kwh ?? 0)}</b> kWh/kg
     </div>
   </div>
 
@@ -2290,7 +2290,7 @@ if (p.phase === "Brand") {
     <div style={{ opacity: 0.7 }}>Total (upstream + your entry)</div>
     <div><b>{totalCo2.toFixed(3)}</b> kg CO₂/kg</div>
     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-      Water <b>{totalWater.toFixed(1)}</b> L/kg · Energy <b>{totalEnergy.toFixed(3)}</b> kWh/kg
+      Water <b>{totalWater.toFixed(1)}</b> L/kg · Energy <b>{fmtEnergyKwhPerKg(totalEnergy)}</b> kWh/kg
     </div>
   </div>
 </div>
