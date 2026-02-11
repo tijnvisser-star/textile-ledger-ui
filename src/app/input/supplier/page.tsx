@@ -116,6 +116,16 @@ function readBestImpactFromPayload(p: any): ImpactPerKg {
 
 const MIN_PROFILE_ID_LEN = 10;
 
+function fmtEnergyKwhPerKg(x: number) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return "0";
+
+  // Geen nep-precisie bij grote getallen
+  if (Math.abs(n) >= 100) return String(Math.round(n)); // 880 -> "880"
+  if (Math.abs(n) >= 10) return n.toFixed(1);           // 12.34 -> "12.3"
+  return n.toFixed(2);                                 // 1.234 -> "1.23"
+}
+
 export default function SupplierInputPage() {
   return (
     <Suspense fallback={<div style={{ padding: 40, fontFamily: "system-ui" }}>Loading…</div>}>
@@ -134,17 +144,20 @@ function SupplierInputPageInner() {
   const productFromUrl = search.get("product") ?? "";
 
   // --- Single source of truth: meName ---
-  const [meName, setMeName] = useState<string>(() => {
-    if (typeof window === "undefined") return "This is me";
-    return window.localStorage.getItem(ME_STORAGE_KEY) ?? "This is me";
-  });
-
+  const [meName, setMeName] = useState<string>("This is me");
   const [meNameDirty, setMeNameDirty] = useState(false);
 
-  const [meCountry, setMeCountry] = useState<string>(() => {
-    if (typeof window === "undefined") return "NL";
-    return window.localStorage.getItem(COUNTRY_STORAGE_KEY) ?? "NL";
-  });
+  const [meCountry, setMeCountry] = useState<string>("NL");
+
+  // Load from localStorage AFTER mount (prevents hydration mismatch)
+  useEffect(() => {
+  const n = window.localStorage.getItem(ME_STORAGE_KEY);
+  const c = window.localStorage.getItem(COUNTRY_STORAGE_KEY);
+
+  if (n != null) setMeName(n);
+  if (c != null) setMeCountry(c);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -218,10 +231,25 @@ function str(v: any) {
   useState<"Cotton" | "Polyester" | "Nylon" | "Other">("Cotton");
 
   // Impacts (beta minimal)
-  const [co2KgPerKg, setCo2KgPerKg] = useState<number>(0);
-  const [waterLPerKg, setWaterLPerKg] = useState<number>(0);
-  const [energyKwhPerKg, setEnergyKwhPerKg] = useState<number>(0);
-  const [pm25GPerKg, setPm25GPerKg] = useState<number>(0);
+  const [co2GPerKgUI, setCo2GPerKgUI] = useState<string>("");        // gebruiker typt g/kg
+  const [waterLPerKgUI, setWaterLPerKgUI] = useState<string>("");    // gebruiker typt L/kg
+  const [energyKwhPerKgUI, setEnergyKwhPerKgUI] = useState<string>(""); // gebruiker typt kWh/kg
+  const [pm25GPerKgUI, setPm25GPerKgUI] = useState<string>("");
+
+  function numFromUI(s: string) {
+    const n = Number(String(s ?? "").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  }  
+  
+  // --- UI values -> numeric values (1 place, for whole page) ---
+  const co2_g_per_kg = numFromUI(co2GPerKgUI);
+  const co2_kg_per_kg = co2_g_per_kg / 1000; // ONLY CO2 gets converted (g/kg -> kg/kg)
+
+  const water_l_per_kg = numFromUI(waterLPerKgUI);
+  const energy_kwh_per_kg = numFromUI(energyKwhPerKgUI);
+
+  const pm25_g_per_kg = numFromUI(pm25GPerKgUI); // PM2.5 stays g/kg (no conversion)
+
   // Transport – UI (controlled)
   const [transportMode, setTransportMode] = useState<string>("truck");
   const [transportDistanceKm, setTransportDistanceKm] = useState<number>(500);
@@ -279,6 +307,11 @@ const [components, setComponents] = useState<ComponentRow[]>([
 
 const [upstreamCalc, setUpstreamCalc] = useState<ImpactPerKg | null>(null);
 const [calcErr, setCalcErr] = useState<string>("");
+
+// totals used in Calculated impacts box
+const totalCo2 = (upstreamCalc?.co2_kg ?? 0) + co2_kg_per_kg;
+const totalWater = (upstreamCalc?.water_l ?? 0) + water_l_per_kg;
+const totalEnergy = (upstreamCalc?.energy_kwh ?? 0) + energy_kwh_per_kg;
 
 // Brand-only Scope 3 calc from links (Manufacturer + Transport)
 const [brandScope3Calc, setBrandScope3Calc] = useState<ImpactPerKg | null>(null);
@@ -424,13 +457,13 @@ const [upstreamTransportManual, setUpstreamTransportManual] = useState<ImpactPer
   function readImpactPerKg(impact_payload: any): ImpactPerKg {
     const imp = impact_payload?.impacts_per_kg ?? {};
     return {
-      co2_kg: Number(imp.co2_kg ?? 0),
+      co2_kg: Number(imp.co2_kg ?? 0),          // opgeslagen als kg/kg
       water_l: Number(imp.water_l ?? 0),
       energy_kwh: Number(imp.energy_kwh ?? 0),
       pm25_g_per_kg: imp.pm25_g_per_kg != null ? Number(imp.pm25_g_per_kg) : undefined,
     };
   }
-  
+    
   function totalPercent() {
     return components.reduce((sum, r) => sum + (Number(r.percent) || 0), 0);
   }
@@ -628,10 +661,10 @@ function buildSaveBundle() {
           pm25_g_per_kg: 0,
         }
       : {
-          co2_kg: Number(co2KgPerKg || 0),
-          water_l: Number(waterLPerKg || 0),
-          energy_kwh: Number(energyKwhPerKg || 0),
-          pm25_g_per_kg: phase === "Transport" ? Number(pm25GPerKg || 0) : 0,
+        co2_kg: co2_kg_per_kg,
+        water_l: water_l_per_kg,
+        energy_kwh: energy_kwh_per_kg,
+        pm25_g_per_kg: phase === "Transport" ? pm25_g_per_kg : 0,        
         };
 
   const scope3Calculated = (phase !== "Brand" ? upstreamCalc : brandScope3Calc) ?? null;
@@ -662,10 +695,10 @@ function buildSaveBundle() {
             energy_kwh: Number(brandScope12EnergyPerKg || 0),
           }
         : {
-            co2_kg: Number(co2KgPerKg || 0),
-            water_l: Number(waterLPerKg || 0),
-            energy_kwh: Number(energyKwhPerKg || 0),
-            ...(phase === "Transport" ? { pm25_g_per_kg: Number(pm25GPerKg || 0) } : {}),
+          co2_kg: co2_kg_per_kg,
+          water_l: water_l_per_kg,
+          energy_kwh: energy_kwh_per_kg,
+          ...(phase === "Transport" ? { pm25_g_per_kg } : {}),
           },
 
     calculated_upstream: phase !== "Brand" ? (upstreamCalc ?? null) : (brandScope3Calc ?? null),
@@ -1411,10 +1444,6 @@ try {
     }
   }
   
-  const totalCo2 = (upstreamCalc?.co2_kg ?? 0) + (Number(co2KgPerKg) || 0);
-  const totalWater = (upstreamCalc?.water_l ?? 0) + (Number(waterLPerKg) || 0);
-  const totalEnergy = (upstreamCalc?.energy_kwh ?? 0) + (Number(energyKwhPerKg) || 0);
-  
   async function markVerification(status: boolean) {
     setMsg("");
   
@@ -1748,8 +1777,10 @@ if (errors.length) {
   onChange={(e) => setProductLine(e.target.value)}
   placeholder='"T-shirt women – SKU 12345"'
 />
+<div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
+  Saved when you press the Save button below.
+</div>
 
-<button onClick={saveActorDetails}>Save</button>
 {/* ANCHOR:END:THIS_IS_ME */}
 </div>
 
@@ -1856,10 +1887,10 @@ if (p.phase === "Brand") {
 
       // ---------- LOAD EXISTING MAPPING (state <- payload) ----------
 const imp = p?.impacts_per_kg ?? {};
-setCo2KgPerKg(Number(imp.co2_kg ?? 0));
-setWaterLPerKg(Number(imp.water_l ?? 0));
-setEnergyKwhPerKg(Number(imp.energy_kwh ?? 0));
-setPm25GPerKg(Number(imp.pm25_g_per_kg ?? 0));
+setCo2GPerKgUI(String((Number(imp.co2_kg ?? 0) || 0) * 1000)); // kg/kg -> g/kg UI
+setWaterLPerKgUI(String(Number(imp.water_l ?? 0) || 0));
+setEnergyKwhPerKgUI(String(Number(imp.energy_kwh ?? 0) || 0));
+setPm25GPerKgUI(String(Number(imp.pm25_g_per_kg ?? 0) || 0));
 
 // Chemicals
 const ch = p?.chemicals ?? {};
@@ -2168,10 +2199,10 @@ if (p.phase === "Brand") {
           pm25_g_per_kg: 0,
         }
       : {
-          co2_kg: Number(co2KgPerKg || 0),
-          water_l: Number(waterLPerKg || 0),
-          energy_kwh: Number(energyKwhPerKg || 0),
-          pm25_g_per_kg: phase === "Transport" ? Number(pm25GPerKg || 0) : 0,
+        co2_kg: numFromUI(co2GPerKgUI) / 1000,      // g/kg -> kg/kg voor opslag/calc
+        water_l: numFromUI(waterLPerKgUI),          // L/kg
+        energy_kwh: numFromUI(energyKwhPerKgUI),    // kWh/kg
+        pm25_g_per_kg: phase === "Transport" ? pm25_g_per_kg : 0,     
         };
 
   // Overrides disabled for now (verifier-only later)
@@ -2189,11 +2220,14 @@ if (p.phase === "Brand") {
           <b style={{ fontSize: 13 }}>{label}</b>
         </div>
         <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-          CO₂ <b>{(v?.co2_kg ?? 0).toFixed(3)}</b> · Water {(v?.water_l ?? 0).toFixed(1)} · Energy {(v?.energy_kwh ?? 0).toFixed(3)}
-          {v?.pm25_g_per_kg != null ? <> · PM2.5 {v.pm25_g_per_kg.toFixed(3)}</> : null}
+        CO₂ <b>{(((v?.co2_kg ?? 0) * 1000)).toFixed(0)}</b> g/kg ·
+        Water <b>{(v?.water_l ?? 0).toFixed(1)}</b> L/kg ·
+        Energy <b>{(v?.energy_kwh ?? 0).toFixed(3)}</b> kWh/kg
+        {v?.pm25_g_per_kg != null ? <> · PM2.5 {v.pm25_g_per_kg.toFixed(3)} g/kg</> : null}
         </div>
+
       </div>
-      <div style={{ textAlign: "right", fontSize: 12, opacity: 0.6, paddingTop: 2 }}>per kg</div>
+      <div style={{ textAlign: "right", fontSize: 12, opacity: 0.6, paddingTop: 2 }}>per kg product</div>
     </div>
   );
   
@@ -2233,7 +2267,7 @@ if (p.phase === "Brand") {
   <>
 <h3>Impact</h3>
 
-<label>CO₂ (kg per kg)</label>
+<label>CO₂ (g per kg)</label>
 {phase !== "RawMaterials" && phase !== "Transport" && phase !== "Brand" && upstreamCalc && (
   <div style={{ marginTop: 10, padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
     <div style={{ opacity: 0.8, marginBottom: 6 }}>
@@ -2262,23 +2296,28 @@ if (p.phase === "Brand") {
 </div>
   </div>
 )}
+
 <input
-  type="number"
+  type="text"
+  inputMode="decimal"
   style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-  value={co2KgPerKg}
-  onChange={(e) => setCo2KgPerKg(Number(e.target.value))}
+  value={co2GPerKgUI}
+  onChange={(e) => setCo2GPerKgUI(e.target.value.replace(/[^\d.,-]/g, ""))}
+  onBlur={() => setCo2GPerKgUI(String(numFromUI(co2GPerKgUI)))}
 />
 
 {phase === "Transport" && (
   <>
     <label>PM2.5 (g per kg) (optional)</label>
     <input
-      type="number"
-      style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-      value={pm25GPerKg}
-      onChange={(e) => setPm25GPerKg(Number(e.target.value))}
-      placeholder="0"
-    />
+    type="text"
+    inputMode="decimal"
+    style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
+    value={pm25GPerKgUI}
+    onChange={(e) => setPm25GPerKgUI(e.target.value.replace(/[^\d.,-]/g, ""))}
+    onBlur={() => setPm25GPerKgUI(String(numFromUI(pm25GPerKgUI)))}
+    placeholder="0"
+/>
   </>
 )}
 
@@ -2286,19 +2325,23 @@ if (p.phase === "Brand") {
   <>
     <label>Water (L per kg)</label>
     <input
-      type="number"
-      style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-      value={waterLPerKg}
-      onChange={(e) => setWaterLPerKg(Number(e.target.value))}
-    />
+    type="text"
+    inputMode="decimal"
+    style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
+    value={waterLPerKgUI}
+    onChange={(e) => setWaterLPerKgUI(e.target.value.replace(/[^\d.,-]/g, ""))}
+    onBlur={() => setWaterLPerKgUI(String(numFromUI(waterLPerKgUI)))}
+/>
 
-    <label>Energy (kWh per kg)</label>
-    <input
-      type="number"
-      style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
-      value={energyKwhPerKg}
-      onChange={(e) => setEnergyKwhPerKg(Number(e.target.value))}
-    />
+<label>Energy (kWh per kg)</label>
+<input
+  type="text"
+  inputMode="decimal"
+  style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
+  value={energyKwhPerKgUI}
+  onChange={(e) => setEnergyKwhPerKgUI(e.target.value.replace(/[^\d.,-]/g, ""))}
+  onBlur={() => setEnergyKwhPerKgUI(String(numFromUI(energyKwhPerKgUI)))}
+/>
   </>
 )}
   </>
@@ -2340,7 +2383,7 @@ if (p.phase === "Brand") {
 <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12, marginTop: 14 }}>
   <h3 style={{ marginTop: 0 }}>Own impact (Scope 1 & 2)</h3>
 
-  <label>CO₂ (kg per kg)</label>
+  <label>CO₂ (g per kg)</label>
   <input
     type="number"
     style={{ width: "100%", padding: 10, margin: "6px 0 12px" }}
@@ -2488,13 +2531,18 @@ if (p.phase === "Brand") {
         <div>
           <label>Energy (kWh/kg)</label>
           <input
-            type="number"
-            style={{ width: "100%", padding: 10, marginTop: 6 }}
-            value={upstreamTransportManual.energy_kwh}
-            onChange={(e) =>
-              setUpstreamTransportManual((s) => ({ ...s, energy_kwh: Number(e.target.value) }))
-            }
-          />
+          type="number"
+          inputMode="decimal"
+          step="0.01"
+          style={{ width: "100%", padding: 10, marginTop: 6 }}
+          value={upstreamTransportManual.energy_kwh}
+          onChange={(e) =>
+          setUpstreamTransportManual((s) => ({ ...s, energy_kwh: Number(e.target.value) }))
+          }
+          onBlur={() =>
+          setUpstreamTransportManual((s) => ({ ...s, energy_kwh: Number(s.energy_kwh) }))
+  }
+/>
         </div>
       </div>
 
