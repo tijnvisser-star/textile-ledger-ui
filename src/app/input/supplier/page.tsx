@@ -1957,21 +1957,6 @@ if (p.phase === "Brand") {
       marginTop: 10,
     }}
   >
-    <button
-  type="button"
-  onClick={importXlsx}
-  disabled={importing || !importFile}
-  style={{
-    padding: "8px 12px",
-    border: "1px solid #ddd",
-    borderRadius: 8,
-    cursor: importing || !importFile ? "not-allowed" : "pointer",
-    background: "#fff",
-    opacity: importing || !importFile ? 0.6 : 1,
-  }}
->
-  {importing ? "Importing…" : "Import now"}
-</button>
 
     <p style={{ marginTop: 0, opacity: 0.75 }}>
       Bulk import Excel. Export happens via the buttons at the bottom (Save & Export).
